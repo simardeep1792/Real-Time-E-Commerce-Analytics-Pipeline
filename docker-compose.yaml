@@ -1,0 +1,396 @@
+version: "3.8"
+
+services:
+
+  ####################
+  # Python Data generator
+  ####################
+  data-generator:
+    build: ./python-data-generator
+    container_name: data-generator
+    depends_on:
+      - broker
+      - zookeeper
+      - init-kafka
+      - schema-registry
+      - connect
+    networks:
+      - new-backend
+    environment:
+      - KAFKA_BROKER=broker:${BROKER_INTERNAL_PORT}
+    restart: on-failure
+
+  ####################
+  # Elasticsearch
+  ####################
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.13.2
+    container_name: elasticsearch
+    environment:
+      - "discovery.type=single-node"
+      - ES_JAVA_OPTS=-Xms4g -Xmx4g
+    ports:
+      - "9200:9200"
+    networks:
+      - new-backend
+    volumes:
+      - $PWD/esdata1:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+
+  ####################
+  # Kibana
+  ####################
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.13.2
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - new-backend
+
+  ####################
+  # Apache Spark Master Node
+  ####################
+  spark_master:
+    image: bitnami/spark:3
+    command: /opt/bitnami/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1,org.elasticsearch:elasticsearch-spark-30_2.12:7.13.1 /opt/bitnami/spark/app/spark-processing.py
+    container_name: spark_master
+    ports:
+      - "8077:8080"
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - $PWD/spark-processing:/opt/bitnami/spark/app
+      - $PWD/spark-checkpoint:/opt/bitnami/spark/checkpoint
+    networks:
+      - new-backend
+    depends_on:
+      - zookeeper
+      - broker
+      - elasticsearch
+      - data-generator
+
+  ####################
+  # zookeeper
+  ####################
+  zookeeper:
+    image: confluentinc/cp-zookeeper:${KAFKA_VERSION}
+    hostname: zookeeper
+    container_name: zookeeper
+    networks:
+      - new-backend
+    ports:
+      - ${ZOOKEEPER_CLIENT_PORT}:2181
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_CLIENT_PORT}
+      ZOOKEEPER_TICK_TIME: ${ZOOKEEPER_TICK_TIME}
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
+      ZOOKEEPER_TOOLS_LOG4J_LOGLEVEL: ERROR
+    volumes:
+      - $PWD/kafka-ce/zk/data:/var/lib/zookeeper/data
+      - $PWD/kafka-ce/zk/txn-logs:/var/lib/zookeeper/log
+    restart: always
+
+  ####################
+  # broker
+  ####################
+  broker:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION}
+    hostname: broker
+    container_name: broker
+    depends_on:
+      - zookeeper
+    networks:
+      - new-backend
+    ports:
+      - ${BROKER_EXTERNAL_PORT}:${BROKER_EXTERNAL_PORT}
+      - ${BROKER_LOCAL_PORT}:${BROKER_LOCAL_PORT}
+      - ${BROKER_JMX_PORT}:9101
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOOKEEPER_CLIENT_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:${BROKER_INTERNAL_PORT},PLAINTEXT_HOST://localhost:${BROKER_LOCAL_PORT}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 1000
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: ${REPLICATION_FACTOR}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_DELETE_TOPIC_ENABLE: true
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: broker
+      KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL: http://schema-registry:${SCHEMA_REGISTRY_PORT}
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_TOOLS_LOG4J_LOGLEVEL: ERROR
+      KAFKA_LOG_RETENTION_MS: -1
+      KAFKA_LOG4J_LOGGERS: org.apache.zookeeper=WARN,org.apache.kafka=WARN,kafka=WARN,kafka.cluster=WARN,kafka.controller=WARN,kafka.coordinator=WARN,kafka.log=WARN,kafka.server=WARN,kafka.zookeeper=WARN,state.change.logger=WARN
+    volumes:
+      - $PWD/kafka-ce/broker/data:/var/lib/kafka/data
+    restart: always
+
+  ####################
+  # broker2
+  ####################
+  broker2:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION}
+    hostname: broker2
+    container_name: broker2
+    depends_on:
+      - zookeeper
+      - broker
+    networks:
+      - new-backend
+    ports:
+      - ${BROKER2_EXTERNAL_PORT}:${BROKER2_EXTERNAL_PORT}
+      - ${BROKER2_LOCAL_PORT}:${BROKER2_LOCAL_PORT}
+      - ${BROKER2_JMX_PORT}:9101
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOOKEEPER_CLIENT_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker2:${BROKER2_INTERNAL_PORT},PLAINTEXT_HOST://localhost:${BROKER2_LOCAL_PORT}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 1000
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: ${REPLICATION_FACTOR}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: broker2
+      KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL: http://schema-registry:${SCHEMA_REGISTRY_PORT}
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_TOOLS_LOG4J_LOGLEVEL: ERROR
+      KAFKA_LOG_RETENTION_MS: -1
+      KAFKA_LOG4J_LOGGERS: org.apache.zookeeper=WARN,org.apache.kafka=WARN,kafka=WARN,kafka.cluster=WARN,kafka.controller=WARN,kafka.coordinator=WARN,kafka.log=WARN,kafka.server=WARN,kafka.zookeeper=WARN,state.change.logger=WARN
+    volumes:
+      - $PWD/kafka-ce/broker2/data:/var/lib/kafka/data
+    restart: always
+
+  ####################
+  # schema-registry
+  ####################
+  schema-registry:
+    image: confluentinc/cp-schema-registry:${KAFKA_VERSION}
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      - zookeeper
+      - broker
+    networks:
+      - new-backend
+    ports:
+      - ${SCHEMA_REGISTRY_PORT}:8081
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker:${BROKER_INTERNAL_PORT}'
+      SCHEMA_REGISTRY_LISTENERS: http://${SCHEMA_REGISTRY_PUBLIC_HOST}:${SCHEMA_REGISTRY_PORT}
+      SCHEMA_REGISTRY_LOG4J_ROOT_LOGLEVEL: WARN
+      SCHEMA_REGISTRY_TOOLS_LOG4J_LOGLEVEL: ERROR
+    volumes:
+      - $PWD/kafka-ce/schema-registry/data:/data
+    restart: always
+
+  ####################
+  # connect
+  ####################
+  connect:
+    image: confluentinc/cp-kafka-connect:${KAFKA_VERSION}
+    hostname: connect
+    container_name: connect
+    depends_on:
+      - zookeeper
+      - broker
+      - schema-registry
+    networks:
+      - new-backend
+    ports:
+      - ${CONNECT_PORT}:8083
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: broker:${BROKER_INTERNAL_PORT}
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_GROUP_ID: connect-distributed-group
+      CONNECT_CONFIG_STORAGE_TOPIC: _kafka-connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _kafka-connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _kafka-connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 1000
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:${SCHEMA_REGISTRY_PORT}'
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:${SCHEMA_REGISTRY_PORT}
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CLASSPATH: /usr/share/java/monitoring-interceptors/monitoring-interceptors-${KAFKA_VERSION}.jar
+      CONNECT_PRODUCER_INTERCEPTOR_CLASSES: io.confluent.monitoring.clients.interceptor.MonitoringProducerInterceptor
+      CONNECT_CONSUMER_INTERCEPTOR_CLASSES: io.confluent.monitoring.clients.interceptor.MonitoringConsumerInterceptor
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      CONNECT_LOG4J_LOGGERS: org.apache.zookeeper=ERROR,org.I0Itec.zkclient=ERROR,org.reflections=ERROR
+      CONNECT_LOG4J_ROOT_LOGLEVEL: WARN
+      CONNECT_TOOLS_LOG4J_LOGLEVEL: ERROR
+    volumes:
+      - $PWD/kafka-ce/connect/plugins:/usr/share/confluent-hub-components
+      - $PWD/kafka-ce/connect/data:/data
+    restart: always
+
+  ####################
+  # ksqldb-server
+  ####################
+  ksqldb-server:
+    image: confluentinc/cp-ksqldb-server:${KAFKA_VERSION}
+    hostname: ksqldb-server
+    container_name: ksqldb-server
+    depends_on:
+      - zookeeper
+      - broker
+      - connect
+    networks:
+      - new-backend
+    ports:
+      - ${KSQLDB_PORT}:8088
+    environment:
+      KSQL_CONFIG_DIR: /etc/ksql
+      KSQL_BOOTSTRAP_SERVERS: broker:${BROKER_INTERNAL_PORT}
+      KSQL_HOST_NAME: ksqldb-server
+      KSQL_LISTENERS: http://0.0.0.0:${KSQLDB_PORT}
+      KSQL_CACHE_MAX_BYTES_BUFFERING: 0
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:${SCHEMA_REGISTRY_PORT}
+      KSQL_PRODUCER_INTERCEPTOR_CLASSES: io.confluent.monitoring.clients.interceptor.MonitoringProducerInterceptor
+      KSQL_CONSUMER_INTERCEPTOR_CLASSES: io.confluent.monitoring.clients.interceptor.MonitoringConsumerInterceptor
+      KSQL_KSQL_CONNECT_URL: http://connect:${CONNECT_PORT}
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_REPLICATION_FACTOR: ${REPLICATION_FACTOR}
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: true
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: true
+      KSQL_LOG4J_ROOT_LOGLEVEL: WARN
+      KSQL_TOOLS_LOG4J_LOGLEVEL: ERROR
+    restart: always
+
+  ####################
+  # ksqldb-cli
+  ####################
+  ksqldb-cli:
+    image: confluentinc/cp-ksqldb-cli:${KAFKA_VERSION}
+    hostname: ksqldb-cli
+    container_name: ksqldb-cli
+    depends_on:
+      - zookeeper
+      - broker
+      - connect
+      - ksqldb-server
+    networks:
+      - new-backend
+    entrypoint: /bin/sh
+    tty: true
+    volumes:
+      - $PWD/kafka-ce/ksqldb-cli/scripts:/data/scripts
+    restart: always    
+
+  ####################
+  # rest-proxy
+  ####################
+  rest-proxy:
+    image: confluentinc/cp-kafka-rest:${KAFKA_VERSION}
+    hostname: rest-proxy
+    container_name: rest-proxy
+    depends_on:
+      - broker
+      - schema-registry
+    networks:
+      - new-backend
+    ports:
+      - ${REST_PROXY_PORT}:8082
+    environment:
+      KAFKA_REST_HOST_NAME: rest-proxy
+      KAFKA_REST_BOOTSTRAP_SERVERS: 'broker:${BROKER_INTERNAL_PORT}'
+      KAFKA_REST_LISTENERS: http://0.0.0.0:${REST_PROXY_PORT}
+      KAFKA_REST_SCHEMA_REGISTRY_URL: http://schema-registry:${SCHEMA_REGISTRY_PORT}
+      KAFKA_REST_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_REST_TOOLS_LOG4J_LOGLEVEL: ERROR
+    restart: always
+    
+  ####################
+  # kafka-ui
+  ####################
+  kafka-ui:
+    hostname: kafka-ui
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - ${KAFKA_UI_PORT}:8080
+    networks:
+      - new-backend
+    depends_on:
+      - zookeeper
+      - broker
+      - schema-registry
+      - connect
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker:${BROKER_INTERNAL_PORT}
+      KAFKA_CLUSTERS_0_METRICS_PORT: ${KAFKA_UI_METRIC_PORT}
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:${SCHEMA_REGISTRY_PORT}
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://connect:${CONNECT_PORT}
+      KAFKA_CLUSTERS_0_KSQLDBSERVER: http://ksqldb-server:${KSQLDB_PORT}
+      KAFKA_CLUSTERS_0_READONLY: ${KAFKA_UI_READONLY}
+      AUTH_TYPE: ${KAFKA_UI_AUTH_TYPE}
+      SPRING_SECURITY_USER_NAME: ${KAFKA_UI_SPRING_SECURITY_USER_NAME}
+      SPRING_SECURITY_USER_PASSWORD: ${KAFKA_UI_SPRING_SECURITY_USER_PASSWORD}
+    restart: always
+
+  ####################
+  # init-kafka
+  ####################
+  init-kafka:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION}
+    container_name: init-kafka
+    depends_on:
+      - zookeeper
+      - broker
+      - schema-registry
+      - connect
+    networks:
+      - new-backend
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+      "
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --list
+      echo -e 'Creating kafka topics'
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --create --if-not-exists --topic ecommerce_customers --replication-factor ${REPLICATION_FACTOR} --partitions ${PARTITIONS}
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --create --if-not-exists --topic ecommerce_products --replication-factor ${REPLICATION_FACTOR} --partitions ${PARTITIONS}
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --create --if-not-exists --topic ecommerce_transactions --replication-factor ${REPLICATION_FACTOR} --partitions ${PARTITIONS}
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --create --if-not-exists --topic ecommerce_user_interactions --replication-factor ${REPLICATION_FACTOR} --partitions ${PARTITIONS}
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --create --if-not-exists --topic ecommerce_product_views --replication-factor ${REPLICATION_FACTOR} --partitions ${PARTITIONS}
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --create --if-not-exists --topic ecommerce_system_logs --replication-factor ${REPLICATION_FACTOR} --partitions ${PARTITIONS}
+      echo -e 'Successfully created the following topics:'
+      kafka-topics --bootstrap-server broker:${BROKER_INTERNAL_PORT} --list
+      "
+
+################################################################################
+#
+# networks
+# - backend
+#
+################################################################################
+networks:
+  new-backend:
+    name: new-backend
