@@ -15,7 +15,7 @@ services:
       - schema-registry
       - connect
     networks:
-      - new-backend
+      - backend
     environment:
       - KAFKA_BROKER=broker:${BROKER_INTERNAL_PORT}
     restart: on-failure
@@ -33,7 +33,7 @@ services:
     ports:
       - "9200:9200"
     networks:
-      - new-backend
+      - backend
     volumes:
       - $PWD/esdata1:/usr/share/elasticsearch/data
     healthcheck:
@@ -58,7 +58,7 @@ services:
     depends_on:
       - elasticsearch
     networks:
-      - new-backend
+      - backend
 
   ####################
   # Apache Spark Master Node
@@ -79,7 +79,7 @@ services:
       - $PWD/spark-processing:/opt/bitnami/spark/app
       - $PWD/spark-checkpoint:/opt/bitnami/spark/checkpoint
     networks:
-      - new-backend
+      - backend
     depends_on:
       - zookeeper
       - broker
@@ -94,7 +94,7 @@ services:
     hostname: zookeeper
     container_name: zookeeper
     networks:
-      - new-backend
+      - backend
     ports:
       - ${ZOOKEEPER_CLIENT_PORT}:2181
     environment:
@@ -117,7 +117,7 @@ services:
     depends_on:
       - zookeeper
     networks:
-      - new-backend
+      - backend
     ports:
       - ${BROKER_EXTERNAL_PORT}:${BROKER_EXTERNAL_PORT}
       - ${BROKER_LOCAL_PORT}:${BROKER_LOCAL_PORT}
@@ -156,7 +156,7 @@ services:
       - zookeeper
       - broker
     networks:
-      - new-backend
+      - backend
     ports:
       - ${BROKER2_EXTERNAL_PORT}:${BROKER2_EXTERNAL_PORT}
       - ${BROKER2_LOCAL_PORT}:${BROKER2_LOCAL_PORT}
@@ -194,7 +194,7 @@ services:
       - zookeeper
       - broker
     networks:
-      - new-backend
+      - backend
     ports:
       - ${SCHEMA_REGISTRY_PORT}:8081
     environment:
@@ -219,7 +219,7 @@ services:
       - broker
       - schema-registry
     networks:
-      - new-backend
+      - backend
     ports:
       - ${CONNECT_PORT}:8083
     environment:
@@ -264,7 +264,7 @@ services:
       - broker
       - connect
     networks:
-      - new-backend
+      - backend
     ports:
       - ${KSQLDB_PORT}:8088
     environment:
@@ -297,7 +297,7 @@ services:
       - connect
       - ksqldb-server
     networks:
-      - new-backend
+      - backend
     entrypoint: /bin/sh
     tty: true
     volumes:
@@ -315,7 +315,7 @@ services:
       - broker
       - schema-registry
     networks:
-      - new-backend
+      - backend
     ports:
       - ${REST_PROXY_PORT}:8082
     environment:
@@ -337,7 +337,7 @@ services:
     ports:
       - ${KAFKA_UI_PORT}:8080
     networks:
-      - new-backend
+      - backend
     depends_on:
       - zookeeper
       - broker
@@ -369,7 +369,7 @@ services:
       - schema-registry
       - connect
     networks:
-      - new-backend
+      - backend
     entrypoint: [ '/bin/sh', '-c' ]
     command: |
       "
@@ -392,5 +392,5 @@ services:
 #
 ################################################################################
 networks:
-  new-backend:
-    name: new-backend
+  backend:
+    name: backend
